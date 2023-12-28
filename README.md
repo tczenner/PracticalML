@@ -2,6 +2,8 @@
 > This repository includes an R-markdown file with code and explanation as well as a compiled HTML file with those same results related to a final project from the Coursera course, "Practical Machine Learning (Johns Hopkins University)."
 > The instructions from the course's final project assignment are shown below.
 
+> The compiled HTML file is hosted at the GitHub Pages site: https://tczenner.github.io/PracticalML/ 
+
 # Course Project Instructions (READ FIRST)
 
 ## Background
