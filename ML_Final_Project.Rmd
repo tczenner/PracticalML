@@ -1,0 +1,212 @@
+---
+title: |
+  ![](https://brand.jhu.edu/assets/uploads/sites/5/2023/09/logo_vertical.jpg){width=100%}
+  
+  Practical Machine Learning: Final Project
+output:
+  html_document:
+    df_print: paged
+---
+
+```{css style settings, echo = FALSE}
+blockquote {
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 14px;
+    border-left: 5px solid #eee;
+}
+```
+
+***
+
+> Using devices such as Jawbone Up, Nike FuelBand, and Fitbit, it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement---a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks.  One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
+
+> In this project, I use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts correctly and incorrectly in 5 different ways.  The goal  is to predict the manner in which they did the exercise.  This is the "classe" variable in the training set.  The following report details the model utilized, cross validation, expected out of sample error, and the basis for various choices. 
+
+***
+
+### Load library packages
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(caret)
+library(parallel)
+library(doParallel)
+```
+
+### Load the full training data set
+```{r message=FALSE, warning=FALSE}
+# Read file
+df <- read_csv("Downloads/pml-training.csv")
+```
+
+### Basic Exploratory Data Analysis (EDA)
+```{r}
+# Review first 10 observations to get a sense of the data
+head(df, n=10)
+```
+
+> The entry id (column 1), all timestamp factors, the new_window and num_window will not provide any predictive power and could impact model accuracy.  I will keep the user names because I looked ahead at the testing set and see that the same names are used in testing so this model can take advantage of individual user nuances.
+
+> There are many columns with only NAs in the first team.  I need to explore this further.
+
+```{r}
+# Check for number of NAs in each column/predictor
+summary(is.na(df))
+```
+> Columns either have zero NAs (FALSE:19622, which is complete data), all NAs (TRUE: 19622, which is empty data), or nearly all NAs (TRUE: 19216).  There is no clean way of imputing that level of missing data so I will remove any column with missing data (NAs).
+
+### Data wrangling
+```{r}
+# Remove all columns with NAs
+df <- df %>% select_if(~ !any(is.na(.)))
+
+# Remove irrelevant factors
+df <- df %>% 
+    select(-c("...1", "raw_timestamp_part_1", "raw_timestamp_part_2", 
+              "cvtd_timestamp", "new_window", "num_window"))
+
+# Make response and user_name factors
+df$classe <- as.factor(df$classe)
+df$user_name <- as.factor(df$user_name)
+
+# Show new dimensions
+dim(df)
+```
+
+### Split data into training/validation and holdout/testing sets
+```{r}
+set.seed(977086)
+trainIndex <- createDataPartition(df$classe, p = 0.8, list = FALSE)
+training <- df[trainIndex,] # 80%
+holdout <- df[-trainIndex,] # 20% -- plenty for large data set
+```
+
+### Create a common 10-fold CV training control for tuning & model comparison
+```{r}
+# Create common folds for 10-fold cross validation model comparisons
+commonFolds <- createFolds(training$classe, k=10)
+commonTrainControl <- trainControl(method = "cv", 
+                                   index = commonFolds,
+                                   verboseIter = FALSE,
+                                   allowParallel = TRUE) 
+```
+
+### Enable parallel processing to train larger models
+```{r message=FALSE, warning=FALSE}
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+
+### Train 4 different models
+```{r}
+# Extreme Gradient Boosting Trees
+set.seed(977086)
+modelXGB <- train(classe ~ ., 
+                 data = training, 
+                 method = "xgbTree", 
+                 trControl = commonTrainControl,
+                 verbose = FALSE)
+```
+
+```{r}
+# Random Forest
+set.seed(977086)
+modelRF <- train(classe ~ ., 
+                 data = training, 
+                 method = "rf", 
+                 trControl = commonTrainControl,
+                 verbose = FALSE)
+```
+
+```{r}
+# Stochastic Gradient Boosting
+set.seed(977086)
+modelGBM <- train(classe ~ ., 
+                 data = training, 
+                 method = "gbm",
+                 trControl = commonTrainControl,
+                 verbose = FALSE)
+```
+
+```{r}
+# K-Nearest Neighbors
+set.seed(977086)
+modelKNN <- train(classe ~ ., 
+                 data = training, 
+                 method = "kknn", 
+                 trControl = commonTrainControl,
+                 preProcess = c("center", "scale"),
+                 verbose = FALSE)
+```
+
+### Display model training results
+```{r}
+modelXGB
+```
+
+```{r}
+confusionMatrix(predict(modelXGB, holdout), holdout$classe)
+```
+
+```{r}
+modelRF
+```
+
+```{r}
+confusionMatrix(predict(modelRF, holdout), holdout$classe)
+```
+
+```{r}
+modelGBM
+```
+
+```{r}
+confusionMatrix(predict(modelGBM, holdout), holdout$classe)
+```
+
+```{r}
+modelKNN
+```
+
+```{r}
+confusionMatrix(predict(modelKNN, holdout), holdout$classe)
+```
+
+### Compare the model results via resampling
+```{r}
+results <- resamples(list(XGB=modelXGB, RF=modelRF, GBM=modelGBM, KNN=modelKNN))
+bwplot(results)
+```
+
+> By comparision of out of sample (holdout data) predictions in the confusion matrices of all models, both XGB and RF perform similarly with Accuracy: 99.16% (out of sample error of only 0.84%).
+
+> A resampling comparison shows that the Extreme Gradient Boosting Tree (XGBTree) model produces the best expected accuracy and kappa so I will retrain that model on ALL training data, including the holdout data prior to using the model to make quiz predictions.
+
+### Retrain selected model on all training data
+```{r}
+# Combine training and holdout sets for final training
+final_training <- training %>% bind_rows(holdout)
+
+# Use tuning from previous CV tuning
+set.seed(977086)
+modelXGB_Final <- train(classe ~ ., 
+                        data = final_training, 
+                        method = "xgbTree",
+                        tuneGrid = data.frame(modelXGB$bestTune),
+                        verbose = FALSE)
+```
+
+### Load and shape final testing set prior to making predictions for quiz submission
+```{r message=FALSE, warning=FALSE}
+quiz <- read_csv("~/Downloads/pml-testing.csv")
+```
+
+### Quiz results (not shown for academic integrity -- 100% obtained on quiz)
+```{r}
+final_answers <- data.frame(quiz$problem_id, predict(modelXGB_Final, quiz))
+```
+
+### Stop parallel processing
+```{r}
+stopCluster(cluster)
+```
